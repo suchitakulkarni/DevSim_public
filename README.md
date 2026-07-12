@@ -26,3 +26,5 @@ This allows to tune physics weight for one datapoint.
 * Two scripts `train_multi_anchor_pinn.py` and `evaluate_multi_anchor.py` will create the physics results. 
 * Adjust numbers in `cost_model.py` script to generate the breakeven cost estimates for your scenario. 
 
+## Note:
+* Plotting scripts were generated using claude.
