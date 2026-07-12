@@ -16,12 +16,9 @@ Digital surrogates designed using e.g., physics-informed neural network, for TCA
 We implement non-linear Poisson-Boltzmann equations in a physics-informed neural network along with data generated using [DevSim](https://devsim.org/index.html) as a standin for industrial TCAD simulators. In total we create 70 datasets, out of which 30 are used for training and rest are used for inference. The network is supplemented with dedicated geometry sampler which creates collocation points grid, where oversampling is implemented at the device junction. 
 
 ## Physics importance
-<img src="https://github.com/suchitakulkarni/DevSim_public/blob/main/results/devsim_pinn_error_profile_w_physics.png" width="800" />
-<img src="https://github.com/suchitakulkarni/DevSim_public/blob/main/results/devsim_pinn_error_profile_no_physics.png" width="800" />
+<img src="https://github.com/suchitakulkarni/DevSim_public/blob/main/results/devsim_pinn_error_profile_w_physics.png" width="400" />
+<img src="https://github.com/suchitakulkarni/DevSim_public/blob/main/results/devsim_pinn_error_profile_no_physics.png" width="400" />
 
-%![Error profile with physics](https://github.com/suchitakulkarni/DevSim_public/blob/main/results/devsim_pinn_error_profile_w_physics.png)
-
-%![Error profile without physics](https://github.com/suchitakulkarni/DevSim_public/blob/main/results/devsim_pinn_error_profile_no_physics.png)
 
 ## How to run
 * The repository contains a single datafile which can be used to run 
