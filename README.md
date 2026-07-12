@@ -3,9 +3,11 @@
 ## Primary result
 Our digital surrogate becomes cheaper than the TCAD simulator for larger than 21k queries. 
 
-![Cost sensitivity](https://github.com/suchitakulkarni/DevSim_public/blob/main/results/results_plw_1.000e%2B01_bclw_1.000e-02/cost_sensitivity.png)
+<img src="https://github.com/suchitakulkarni/DevSim_public/blob/main/results/results_plw_1.000e%2B01_bclw_1.000e-02/cost_sensitivity.png" width="600" />
 
-The surrogates delivers results at < 10% accuracy over device lengths of $0.1\rm{micron} < L < 3.16 \rm{micron}$ and doping concentrations of $10^5 < n_{D_0} < 10^7$ for a 1D diode. We explicitly mark areas where the current model is not valid and further improvements are necessary. Generalisations beyond 1D diodes are foreseen in code design.
+The cost sensitivity is not a flat estimate, it depends on the complexity of the solver and the train time of the surrogate. The deployment benefit is quickly reached for more complext 2D/3D solvers which will be analysed in the near future. 
+
+Our surrogates delivers results at < 10% accuracy over device lengths of $0.1\rm{micron} < L < 3.16 \rm{micron}$ and doping concentrations of $10^5 < n_{D_0} < 10^7$ for a 1D diode. We explicitly mark areas where the current model is not valid and further improvements are necessary. Generalisations beyond 1D diodes are foreseen in code design.
 
 ![Model generalisation](https://github.com/suchitakulkarni/DevSim_public/blob/main/results/results_plw_1.000e%2B01_bclw_1.000e-02/generalization_map.png)
 
