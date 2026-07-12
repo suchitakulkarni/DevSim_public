@@ -20,10 +20,10 @@ We implement non-linear Poisson-Boltzmann equations in a physics-informed neural
 ## Physics importance
 <img src="https://github.com/suchitakulkarni/DevSim_public/blob/main/results/devsim_pinn_error_profile_w_physics.png" width="600" />
 <img src="https://github.com/suchitakulkarni/DevSim_public/blob/main/results/devsim_pinn_error_profile_no_physics.png" width="600" />
-
+The two images show $~9x$ error reduction at the junction, showing importance of including physics in the simulations.
 
 ## How to run
-* Use `pip install -r requirements.txt`, this will automaticall install `DevSim`.
+* Use `pip install -r requirements.txt`, this will automatically install `DevSim`.
 * The repository contains a single datafile which can be used to run 
 `python ablation_physics_1d.py`
 This allows to tune physics weight for one datapoint.
@@ -31,7 +31,7 @@ This allows to tune physics weight for one datapoint.
 `pip install devsim`. 
 * Once installed run 
 `python devsim_data_generator/run_devsim_diode.py`
-* Two scripts `train_multi_anchor_pinn.py` and `evaluate_multi_anchor.py` will create the physics results. 
+* Two scripts `train_multi_anchor_pinn.py` and `evaluate_multi_anchor.py` will create the physics results. Alternatively, there are CUDA trained model check points, which can be loaded only for inference purposes and training can be skipped. All hyper-parameters are mentioed in the `src/config.py` file.
 * Adjust numbers in `cost_model.py` script to generate the breakeven cost estimates for your scenario. 
 
 ## Note:
