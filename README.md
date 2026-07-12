@@ -23,6 +23,7 @@ We implement non-linear Poisson-Boltzmann equations in a physics-informed neural
 
 
 ## How to run
+* Use `pip install -r requirements.txt`, this will automaticall install `DevSim`.
 * The repository contains a single datafile which can be used to run 
 `python ablation_physics_1d.py`
 This allows to tune physics weight for one datapoint.
