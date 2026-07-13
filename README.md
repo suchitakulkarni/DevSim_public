@@ -10,6 +10,8 @@ The cost sensitivity is not a flat estimate, it depends on the complexity of the
 Our surrogate delivers results at < 10% accuracy over device lengths of $0.1\rm{micron} < L < 3.16 \rm{micron}$ and doping concentrations of $10^5 < n_{D_0}/n_i < 10^7$ for a 1D diode. We explicitly mark areas where the current model is not valid and further improvements are necessary. Generalisations beyond 1D diodes are foreseen in code design.
 
 Here is a dense heatmap representation of generalisation result
+![Model animation](https://github.com/suchitakulkarni/DevSim_public/blob/main/results/results_plw_1.000e%2B01_bclw_1.000e-02/potential_sweep.gif)
+
 ![Model generalisation](https://github.com/suchitakulkarni/DevSim_public/blob/main/results/results_plw_1.000e%2B01_bclw_1.000e-02/generalization_heatmap_rms.png)
 
 This is a scatter plot, for visual comparison
