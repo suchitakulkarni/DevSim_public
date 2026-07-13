@@ -59,38 +59,68 @@ def solve_potential_only(device_name = "diode"):
 
 
 
-def extract_and_save(output_file = "test.npz", device_name = "diode"):
+def extract_and_save(output_file = "test.npz", device_name = "diode", dims = "1d"):
     x         = np.array(get_node_model_values(device=device_name, region=REGION, name="x"))
     potential = np.array(get_node_model_values(device=device_name, region=REGION, name="Potential"))
     net_doping= np.array(get_node_model_values(device=device_name, region=REGION, name="NetDoping"))
 
     # identify boundary nodes: first and last node are the contacts
     # devsim 1d meshes are sorted by x
-    sort_idx  = np.argsort(x)
-    x         = x[sort_idx]
-    potential = potential[sort_idx]
-    net_doping= net_doping[sort_idx]
+    #sort_idx  = np.argsort(x)
+    #x         = x[sort_idx]
+    #potential = potential[sort_idx]
+    #net_doping= net_doping[sort_idx]
 
-    bc_indices = np.array([0, len(x) - 1])
-    bc_x       = x[bc_indices]
-    bc_pot     = potential[bc_indices]
+    #bc_indices = np.array([0, len(x) - 1])
+    #bc_x       = x[bc_indices]
+    #bc_pot     = potential[bc_indices]
 
     print(f'computed length of device is {2*np.max(np.abs(x))}')
-    np.savez(
-        output_file,
-        length          = x.max() - x.min(), # this is hard coded, one has to check if this is right
-        nD0             = max(net_doping),
-        x          = x,
-        potential  = potential,
-        net_doping = net_doping,
-        bc_x       = bc_x,
-        bc_pot     = bc_pot,
-    )
-    print(f"Saved {len(x)} nodes to {output_file}")
-    print(f"x range: {x.min():.3e} to {x.max():.3e} cm")
-    print(f"Potential range: {potential.min():.4f} to {potential.max():.4f} V")
-    print(f"NetDoping range: {net_doping.min():.3e} to {net_doping.max():.3e} cm^-3")
-    print(f"BC potentials: top={bc_pot[0]:.4f} V, bot={bc_pot[1]:.4f} V")
+    if dims == "2d":
+        y = np.array(get_node_model_values(device=device_name, region=REGION, name="y"))
+        top_mask = np.isclose(x, x.min()) & (y >= 0.8e-5) & (y <= 1e-5)
+        bot_mask = np.isclose(x, x.max()) # this asymmetry of defining y range for top but not for bottom is devsim definition
+        bc_mask = top_mask | bot_mask
+        bc_x, bc_y, bc_pot = x[bc_mask], y[bc_mask], potential[bc_mask]
+        np.savez(
+           output_file,
+           length_x          = x.max() - x.min(), # this is hard coded, one has to check if this is right
+           length_y          = y.max() - y.min(), # this is hard coded, one has to check if this is right
+           nD0             = max(net_doping),
+           x          = x,
+           y          = y,
+           potential  = potential,
+           net_doping = net_doping,
+           bc_x       = bc_x,
+           bc_y       = bc_y,
+           bc_pot     = bc_pot,
+       )
+       #print(f"Saved {len(x)*len(y)} nodes to {output_file}")
+       #print(f"x range: {x.min():.3e} to {x.max():.3e} cm")
+       #print(f"y range: {y.min():.3e} to {y.max():.3e} cm")
+    else: # this will need a 3D too
+       sort_idx  = np.argsort(x)
+       x         = x[sort_idx]
+       potential = potential[sort_idx]
+       net_doping= net_doping[sort_idx]
+       bc_indices = np.array([0, len(x) - 1])
+       bc_x       = x[bc_indices]
+       bc_pot     = potential[bc_indices]
+       np.savez(
+           output_file,
+           length          = x.max() - x.min(), # this is hard coded, one has to check if this is right
+           nD0             = max(net_doping),
+           x          = x,
+           potential  = potential,
+           net_doping = net_doping,
+           bc_x         = bc_x,
+           bc_pot     = bc_pot,
+       )
+       print(f"Saved {len(x)} nodes to {output_file}")
+       print(f"x range: {x.min():.3e} to {x.max():.3e} cm")
+       print(f"Potential range: {potential.min():.4f} to {potential.max():.4f} V")
+       print(f"NetDoping range: {net_doping.min():.3e} to {net_doping.max():.3e} cm^-3")
+       print(f"BC potentials: top={bc_pot[0]:.4f} V, bot={bc_pot[1]:.4f} V")
 
 
 def generate_samples(L_in = [1e-6, 1e-4], nD_in = [1e15, 1e19], sample_type = 'train'):
