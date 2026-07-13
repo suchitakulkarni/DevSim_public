@@ -79,6 +79,41 @@ def compare_predictions_vs_r(r, y_pred, y_data):
     ax.legend()
     return fig
 
+def plot_devsim_2d_reconstruction(x, y, psi_truth, psi_pred):
+    """Three-panel scatter comparison over the 2D (x,y) validation cloud: ground
+    truth potential, PINN reconstruction (same diverging color scale as ground
+    truth, so directly comparable by eye), and their percent difference. Percent
+    difference is taken relative to the ground truth's peak magnitude, not
+    pointwise - psi passes through zero at the junction, where a pointwise
+    percent error blows up to +-inf. This is the panel that's actually easy to
+    read: psi_truth/psi_pred are both in dimensionless psi=phi/V_T units, which
+    don't have an intuitive scale on their own, while %-of-peak does."""
+    pct_diff = (psi_truth - psi_pred) / np.max(np.abs(psi_truth)) * 100
+
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+    shared_norm = _diverging_norm(np.concatenate([psi_truth, psi_pred]))
+    sc0 = axes[0].scatter(x, y, c=psi_truth, cmap=DIVERGING_CMAP, norm=shared_norm, s=20)
+    fig.colorbar(sc0, ax=axes[0], label=r"potential $\psi$")
+    axes[0].set_title("DevSim ground truth")
+
+    sc1 = axes[1].scatter(x, y, c=psi_pred, cmap=DIVERGING_CMAP, norm=shared_norm, s=20)
+    fig.colorbar(sc1, ax=axes[1], label=r"potential $\psi$")
+    axes[1].set_title("PINN reconstruction")
+
+    pct_norm = _diverging_norm(pct_diff)
+    sc2 = axes[2].scatter(x, y, c=pct_diff, cmap=DIVERGING_CMAP, norm=pct_norm, s=20)
+    fig.colorbar(sc2, ax=axes[2], label="% difference (of peak potential)")
+    axes[2].set_title(f"difference (max = {np.max(np.abs(pct_diff)):.2f}%)")
+
+    for ax in axes:
+        ax.set_xlabel("x (AU)")
+        ax.set_ylabel("y (AU)")
+        ax.set_aspect("equal")
+
+    fig.suptitle("2D p-n junction potential: DevSim vs PINN")
+    return fig
+
 def plot_uncertainty_band(x, mean, std, n_std=1.0):
     """Prediction curve (e.g. MC-dropout mean) with a shaded uncertainty band
     (+/- n_std*std) around it. x, mean, std must be the same length - squeezes
@@ -676,7 +711,7 @@ _SEQ_BLUE_HEX = ["#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95
 _SEQ_BLUE_CMAP = mcolors.LinearSegmentedColormap.from_list("seq_blue", _SEQ_BLUE_HEX)
 
 
-def plot_generalization_map(summary, metric="rms", train_summary=None):
+def plot_generalization_map(summary, metric="rms", train_summary=None, threshold_pct=10.0):
     """Two-panel 2D map of held-out generalization error across the
     (L, nD_scale) sweep plane: absolute error (mV) on the left, error as a
     percentage of that anchor's own peak potential swing on the right. The
@@ -695,6 +730,11 @@ def plot_generalization_map(summary, metric="rms", train_summary=None):
     sweep doesn't have. train_summary (optional, same tuple shape): plotted
     as small uncolored markers for sweep-coverage context only - train
     anchors have no held-out error to show.
+
+    threshold_pct: anchors whose error (as % of peak potential) exceeds this
+    get an explicit red ring overlay + legend entry marking them as "needs
+    model improvement" - an honest, visible boundary on the validated region
+    rather than silently dropping the bad corner from the figure.
     """
     col = 4 if metric == "rms" else 3
     metric_name = "RMS error" if metric == "rms" else "Max |error|"
@@ -704,6 +744,7 @@ def plot_generalization_map(summary, metric="rms", train_summary=None):
     err_mV   = np.array([float(row[col]) for row in summary])
     peak_mV  = np.array([float(row[5]) for row in summary])
     err_pct  = err_mV / peak_mV * 100
+    flagged  = err_pct > threshold_pct
 
     logL, logN = np.log10(L), np.log10(nD_scale)
     if train_summary is not None:
@@ -721,12 +762,15 @@ def plot_generalization_map(summary, metric="rms", train_summary=None):
                        label="train anchors", zorder=1)
         sc = ax.scatter(logL, logN, c=values, cmap=_SEQ_BLUE_CMAP,
                         s=180, edgecolor="#0b0b0b", linewidth=0.6, zorder=2)
+        if flagged.any():
+            ax.scatter(logL[flagged], logN[flagged], s=320, facecolors="none",
+                       edgecolor="#b3392c", linewidth=2.4, marker="o", zorder=3,
+                       label=f"not validated (>{threshold_pct:.0f}% error) -\nneeds model improvement")
         cbar = fig.colorbar(sc, ax=ax)
         cbar.set_label(cbar_label)
         ax.set_xlabel("log10(L [cm])")
         ax.set_ylabel("log10(nD_scale)")
-        if train_summary is not None:
-            ax.legend()
+        ax.legend(loc="best", fontsize=8)
 
     fig.suptitle("Generalization error across the (L, nD0) sweep")
     return fig

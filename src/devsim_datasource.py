@@ -1,6 +1,6 @@
-import csv
+import csv, sys
 import numpy as np
-from scipy.interpolate import interp1d
+from scipy.interpolate import interp1d, RegularGridInterpolator
 from torch.utils.data import DataLoader
 import torch
 import logging
@@ -20,6 +20,93 @@ epsilon_r = 11.7
 V_T       = k_B * T / q
 L_D       = np.sqrt(epsilon_r * epsilon_0 * k_B * T / (q**2 * ni))
 
+
+class DevsimDataSource2D:
+    """
+    Wraps .npz output of 2D diode simulation.
+
+    Design contract (matches CylinderCharges):
+        - ALL public methods receive PHYSICAL coordinates (cm)
+        - coords_normalised() is the single place that converts physical -> normalised
+        - Interpolators are built on physical x internally
+        - potential()          returns phi/V_T         (dimensionless, O(10))
+        - potential_normalised() returns phi/(V_T*psi_peak) (O(1), for plotting)
+        - density()            returns NetDoping/ni    (dimensionless, O(67000))
+        - density_normalised() returns NetDoping/ni/nD_peak_normalised (O(1))
+        - nD_peak_normalised   scalar to pass as nD_scale to poisson_loss_nonlinear
+    """
+    n_spatial_dims = 2
+    def __init__(self, npz_path):
+        data           = np.load(npz_path)
+        x_raw          = data["x"]            # cm, physical
+        y_raw          = data["y"]            # cm, physical
+        potential_raw  = data["potential"]    # V,  physical
+        net_doping_raw = data["net_doping"]   # cm^-3, physical
+        bc_x_raw       = data["bc_x"]         # cm, physical
+        bc_y_raw       = data["bc_y"]         # cm, physical
+        bc_pot_raw     = data["bc_pot"]        # V,  physical    
+
+        # geometry in physical units - callers use these to set up SlabGenerator
+        self.x_min = float(x_raw.min())
+        self.x_max = float(x_raw.max())
+        self.y_min = float(y_raw.min())
+        self.y_max = float(y_raw.max())
+        self.Lx     = data["length_x"]
+        self.Ly     = data["length_y"]
+
+        # peak values for normalisation - exposed so training script can pass to loss
+        self.psi_peak            = float(np.max(np.abs(potential_raw / V_T)))
+        self.nD_peak_normalised  = float(np.max(np.abs(data["nD0"] / ni)))
+
+        # boundary conditions in dimensionless units
+        self.bc_x_physical = bc_x_raw                  # cm - pass to SlabGenerator
+        self.bc_y_physical = bc_y_raw                  # cm - pass to SlabGenerator
+        self.bc_pot        = bc_pot_raw / V_T           # phi/V_T, for BCDataset
+
+        # interpolators built on PHYSICAL x - no hidden normalisation
+        # for  this to work, we will first need to build a x*y shaped input
+        x_unique, x_idx = np.unique(x_raw, return_inverse = True)
+        y_unique, y_idx = np.unique(y_raw, return_inverse = True)
+        pot_grid = np.full((len(x_unique), len(y_unique)), np.nan)
+        pot_grid[x_idx, y_idx] = potential_raw / V_T
+        net_doping_raw = np.full((len(x_unique), len(y_unique)), np.nan)
+        net_doping_raw[x_idx, y_idx] = data["net_doping"]
+        if np.isnan(pot_grid).any(): raise ValueError('something went wrong with grid construction')
+        if not len(np.unique(x_idx * len(y_unique) + y_idx) ) == len(x_raw): raise ValueError("index collision detected in constructing 2D grid")
+        self._pot_interp2D = RegularGridInterpolator((x_unique, y_unique), pot_grid,
+                                    bounds_error = False, fill_value = None)
+        self._nD_interp2D  = RegularGridInterpolator((x_unique, y_unique), net_doping_raw / ni,
+                                    bounds_error = False, fill_value = 0.0)
+
+        # Debye length and gamma
+        self.gamma = np.sqrt(self.Lx**2 + self.Ly**2)/ L_D # this is a guess, needs a check
+    
+        logger.info(f"Device length   Lx,Ly    = {self.Lx:.3e}, {self.Ly:.3e} cm")
+        logger.info(f"Debye length    L_D  = {L_D:.3e} cm")
+        logger.info(f"gamma                = {self.gamma:.3e}")
+        logger.info(f"nD_peak_normalised   = {self.nD_peak_normalised:.3e}")
+        logger.info(f"psi_peak             = {self.psi_peak:.3f}")
+
+    def coords_normalised(self, x, y, z):
+        """Physical cm -> normalised [0,1]. Single normalisation point."""
+        return ((x - self.x_min) / self.Lx, (y - self.y_min) / self.Ly,)
+
+    def potential(self, x, y, z):
+        """Physical x (cm) -> phi/V_T. O(10)."""
+        return self._pot_interp2D(np.stack([x, y], axis = -1))
+
+    def potential_normalised(self, x, y, z):
+        """Physical x (cm) -> phi/(V_T*psi_peak). O(1). For plotting only."""
+        return self._pot_interp2D(np.stack([x, y], axis = -1)) / self.psi_peak
+
+    def density(self, x, y, z):
+        """Physical x (cm) -> NetDoping/ni. O(67000)."""
+        return self._nD_interp2D(np.stack([x, y], axis = -1))
+
+    def density_normalised(self, x, y, z):
+        """Physical x (cm) -> NetDoping/ni/nD_peak_normalised. O(1).
+        Pass to CollocDataset. Pass nD_peak_normalised as nD_scale to loss."""
+        return self._nD_interp2D(np.stack([x, y], axis = -1)) / self.nD_peak_normalised
 
 class DevsimDataSource:
     """
@@ -47,6 +134,10 @@ class DevsimDataSource:
         # geometry in physical units - callers use these to set up SlabGenerator
         self.x_min = float(x_raw.min())
         self.x_max = float(x_raw.max())
+        self.y_min = None
+        self.y_max = None
+        self.z_min = None
+        self.z_max = None
         self.L     = data["length"]
 
         # peak values for normalisation - exposed so training script can pass to loss
@@ -55,6 +146,7 @@ class DevsimDataSource:
 
         # boundary conditions in dimensionless units
         self.bc_x_physical = bc_x_raw                  # cm - pass to SlabGenerator
+        self.bc_y_physical = np.zeros_like(bc_x_raw)   # 1D device embedded in 3D PINN - y is always 0
         self.bc_pot        = bc_pot_raw / V_T           # phi/V_T, for BCDataset
 
         # interpolators built on PHYSICAL x - no hidden normalisation
@@ -107,10 +199,15 @@ class SlabGenerator:
     y and z are zero throughout - 1D device embedded in 3D PINN.
     """
 
-    def __init__(self, x_min, x_max, n_points):
+    def __init__(self, x_min, x_max, n_points, n_spatial_dim = 1, y_min = None, y_max = None, z_min = None, z_max = None):
         self.x_min    = x_min
         self.x_max    = x_max
+        self.y_min    = y_min
+        self.y_max    = y_max
+        self.z_min    = z_min
+        self.z_max    = z_max
         self.n_points = n_points
+        self.n_spatial_dim = n_spatial_dim
 
 
     def sample_interior(self, seed=None):
@@ -119,14 +216,22 @@ class SlabGenerator:
         x   = rng.uniform(self.x_min, self.x_max, self.n_points)
         y   = np.zeros_like(x)
         z   = np.zeros_like(x)
+        if self.n_spatial_dim == 2: 
+            y   = rng.uniform(self.y_min, self.y_max, self.n_points)
+        if self.n_spatial_dim == 3: 
+            y   = rng.uniform(self.y_min, self.y_max, self.n_points)
+            z   = rng.uniform(self.z_min, self.z_max, self.n_points)
         return x, y, z
 
     def sample_interior_biased(self, source, seed=None, n_oversample=5):
         """Gaussian sampler biased toward the junction (x = x_min + L/2), sigma
-        from sample_junction(). source: DevsimDataSource. Physical coordinates."""
+        from sample_junction(). source: DevsimDataSource[2D]. Physical coordinates.
+        Doping only varies with x (see diode_common.SetNetDoping), so y is
+        sampled uniformly rather than biased."""
 
-        sigma_clamped = sample_junction(source.nD_peak_normalised, source.L)
-        mu = self.x_min + source.L / 2
+        L_x = self.x_max - self.x_min
+        sigma_clamped = sample_junction(source.nD_peak_normalised, L_x)
+        mu = self.x_min + L_x / 2
 
         rng    = np.random.default_rng(seed)
         x_grid = rng.normal(mu, sigma_clamped, self.n_points * n_oversample)
@@ -135,7 +240,13 @@ class SlabGenerator:
         if len(x_acc) < self.n_points:
             x_fill = rng.uniform(self.x_min, self.x_max, self.n_points - len(x_acc))
             x_acc  = np.concatenate([x_acc, x_fill])
-        return x_acc, np.zeros(self.n_points), np.zeros(self.n_points)
+
+        if self.n_spatial_dim == 2:
+            y_acc = rng.uniform(self.y_min, self.y_max, self.n_points)
+        else:
+            y_acc = np.zeros(self.n_points)
+
+        return x_acc, y_acc, np.zeros(self.n_points)
 
     def sample_boundary(self):
         """Two endpoints in physical coordinates."""
@@ -145,14 +256,14 @@ class SlabGenerator:
         return x, y, z
 
 
-def build_loaders(source, n_obs, n_colloc, n_bc, obs_batch, device,
+def build_loaders(source, n_obs, n_colloc, n_bc, obs_batch, device, n_spatial_dim = 1,
                   obs_seed = 42, val_seed = 99, colloc_seed = 86):
     """
     Builds DataLoaders and validation tensors for train_model().
     All sampling in physical coordinates; normalisation applied here
     before tensors are built so the network always sees normalised input.
     """
-    gen = SlabGenerator(source.x_min, source.x_max, n_obs)
+    gen = SlabGenerator(source.x_min, source.x_max, n_obs, n_spatial_dim = n_spatial_dim, y_min = source.y_min, y_max = source.y_max)
 
     # training observations
     x_obs, y_obs, z_obs = gen.sample_interior(seed = obs_seed)
@@ -181,7 +292,7 @@ def build_loaders(source, n_obs, n_colloc, n_bc, obs_batch, device,
     val_ds   = ObservedDataset(X_val, pot_val, condition_params = condition_params_val)
 
     # collocation points
-    gen_c = SlabGenerator(source.x_min, source.x_max, n_colloc)
+    gen_c = SlabGenerator(source.x_min, source.x_max, n_colloc, n_spatial_dim = n_spatial_dim, y_min = source.y_min, y_max = source.y_max)
     x_c, y_c, z_c = gen_c.sample_interior_biased(source, seed = colloc_seed)
     xn_c = np.stack(source.coords_normalised(x_c, y_c, z_c), axis = 1)
     X_colloc  = torch.tensor(xn_c, dtype=torch.float32).to(device)
@@ -195,16 +306,20 @@ def build_loaders(source, n_obs, n_colloc, n_bc, obs_batch, device,
     colloc_batch = max(1, obs_batch * n_colloc // n_obs)
     colloc_loader = DataLoader(colloc_ds, batch_size=colloc_batch, shuffle=True)
 
-    # boundary conditions
-    x_b, y_b, z_b = SlabGenerator(source.x_min, source.x_max, 2).sample_boundary()
+    # boundary conditions - read straight from source: these are the actual
+    # DEVSIM contact nodes (Dirichlet BC), not resampled points
+    x_b = source.bc_x_physical
+    y_b = source.bc_y_physical
+    z_b = np.zeros_like(x_b)
+    n_bc_actual = len(x_b)
     xn_b = np.stack(source.coords_normalised(x_b, y_b, z_b), axis = 1)
     X_bc   = torch.tensor(xn_b, dtype=torch.float32).to(device)
 
-    gamma_vals_bc = np.full(n_bc, source.gamma)
-    nD_scale_vals_bc = np.full(n_bc, source.nD_peak_normalised)
-    condition_params_bc =  np.stack([gamma_vals_bc, nD_scale_vals_bc], axis = 1) 
+    gamma_vals_bc = np.full(n_bc_actual, source.gamma)
+    nD_scale_vals_bc = np.full(n_bc_actual, source.nD_peak_normalised)
+    condition_params_bc =  np.stack([gamma_vals_bc, nD_scale_vals_bc], axis = 1)
     bc_ds  = BCDataset(X_bc = X_bc, pot_bc = source.bc_pot, condition_params = condition_params_bc)
-    bc_loader = DataLoader(bc_ds, batch_size=2, shuffle=False)
+    bc_loader = DataLoader(bc_ds, batch_size=n_bc_actual, shuffle=False)
 
     return obs_loader, colloc_loader, bc_loader, val_ds.X, val_ds.y, val_ds.cond_params
 
@@ -221,7 +336,7 @@ def read_manifest(manifest_path="data/records.csv", split=None):
     return rows
 
 
-def build_multi_anchor_loaders(anchor_files, n_obs_per_anchor, n_colloc_per_anchor, obs_batch, device,
+def build_multi_anchor_loaders(anchor_files, n_obs_per_anchor, n_colloc_per_anchor, obs_batch, device, n_spatial_dim = 1, 
                                 obs_seed=42, val_seed=99, colloc_seed=86):
     """
     Multi-anchor version of build_loaders(): loops over several anchor .npz
@@ -243,8 +358,13 @@ def build_multi_anchor_loaders(anchor_files, n_obs_per_anchor, n_colloc_per_anch
     X_bc_list, pot_bc_list, cond_bc_list = [], [], []
 
     for anchor_file in anchor_files:
-        source = DevsimDataSource(anchor_file)
-        gen = SlabGenerator(source.x_min, source.x_max, n_obs_per_anchor)
+        if n_spatial_dim == 1:
+            source = DevsimDataSource(anchor_file)
+        elif  n_spatial_dim == 2:
+            source = DevsimDataSource2D(anchor_file)
+        else:
+            raise ValueError('Device spatial dimensions unrecognised')
+        gen = SlabGenerator(source.x_min, source.x_max, n_obs_per_anchor, n_spatial_dim = n_spatial_dim, y_min = source.y_min, y_max = source.y_max)
 
         # observed
         x_obs, y_obs, z_obs = gen.sample_interior(seed=obs_seed)
@@ -265,7 +385,7 @@ def build_multi_anchor_loaders(anchor_files, n_obs_per_anchor, n_colloc_per_anch
         cond_val_list.append(np.stack([gamma_vals, nD_scale_vals], axis=1))
 
         # collocation
-        gen_c = SlabGenerator(source.x_min, source.x_max, n_colloc_per_anchor)
+        gen_c = SlabGenerator(source.x_min, source.x_max, n_colloc_per_anchor, n_spatial_dim = n_spatial_dim, y_min = source.y_min, y_max = source.y_max)
         x_c, y_c, z_c = gen_c.sample_interior_biased(source, seed=colloc_seed)
         xn_c = np.stack(source.coords_normalised(x_c, y_c, z_c), axis = 1)
         nD_c = source.density_normalised(x_c, y_c, z_c)
@@ -275,14 +395,18 @@ def build_multi_anchor_loaders(anchor_files, n_obs_per_anchor, n_colloc_per_anch
         nD_colloc_list.append(nD_c)
         cond_colloc_list.append(np.stack([gamma_vals_c, nD_scale_vals_c], axis=1))
 
-        # boundary - always exactly 2 points per anchor
-        x_b, y_b, z_b = SlabGenerator(source.x_min, source.x_max, 2).sample_boundary()
+        # boundary - read straight from source: these are the actual DEVSIM
+        # contact nodes (Dirichlet BC), not resampled points
+        x_b = source.bc_x_physical
+        y_b = source.bc_y_physical
+        z_b = np.zeros_like(x_b)
+        n_bc_anchor = len(x_b)
         xn_b = np.stack(source.coords_normalised(x_b, y_b, z_b), axis = 1)
-        gamma_vals_b = np.full(2, source.gamma)
-        nD_scale_vals_b = np.full(2, source.nD_peak_normalised)
+        gamma_vals_b = np.full(n_bc_anchor, source.gamma)
+        nD_scale_vals_b = np.full(n_bc_anchor, source.nD_peak_normalised)
         X_bc_list.append(xn_b)
         pot_bc_list.append(source.bc_pot)
-        cond_bc_list.append(np.stack([gamma_vals_b, nD_scale_vals_b], axis=1))
+        cond_bc_list.append(np.stack([gamma_vals_b, nD_scale_vals_b], axis = 1))
         
 
     X_obs, y_obs, cond_obs = (np.concatenate(v, axis=0) for v in (X_obs_list, y_obs_list, cond_obs_list))
@@ -290,18 +414,18 @@ def build_multi_anchor_loaders(anchor_files, n_obs_per_anchor, n_colloc_per_anch
     X_colloc, nD_colloc, cond_colloc = (np.concatenate(v, axis=0) for v in (X_colloc_list, nD_colloc_list, cond_colloc_list))
     X_bc, pot_bc, cond_bc = (np.concatenate(v, axis=0) for v in (X_bc_list, pot_bc_list, cond_bc_list))
 
-    obs_ds = ObservedDataset(X_obs, y_obs, condition_params=cond_obs)
-    obs_loader = DataLoader(obs_ds, batch_size=obs_batch, shuffle=True)
+    obs_ds = ObservedDataset(X_obs, y_obs, condition_params = cond_obs)
+    obs_loader = DataLoader(obs_ds, batch_size = obs_batch, shuffle = True)
 
     val_ds = ObservedDataset(X_val, y_val, condition_params=cond_val)
 
-    colloc_ds = CollocDataset(X_colloc=X_colloc, rho_colloc=nD_colloc, condition_params=cond_colloc)
+    colloc_ds = CollocDataset(X_colloc = X_colloc, rho_colloc = nD_colloc, condition_params=cond_colloc)
     n_obs_total = n_obs_per_anchor * len(anchor_files)
     n_colloc_total = n_colloc_per_anchor * len(anchor_files)
     colloc_batch = max(1, obs_batch * n_colloc_total // n_obs_total)
     colloc_loader = DataLoader(colloc_ds, batch_size=colloc_batch, shuffle=True)
 
-    bc_ds = BCDataset(X_bc=X_bc, pot_bc=pot_bc, condition_params=cond_bc)
-    bc_loader = DataLoader(bc_ds, batch_size=len(anchor_files) * 2, shuffle=False)
+    bc_ds = BCDataset(X_bc = X_bc, pot_bc = pot_bc, condition_params = cond_bc)
+    bc_loader = DataLoader(bc_ds, batch_size = len(X_bc), shuffle=False)
 
     return obs_loader, colloc_loader, bc_loader, val_ds.X, val_ds.y, val_ds.cond_params
