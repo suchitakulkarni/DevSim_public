@@ -23,7 +23,7 @@ We implement non-linear Poisson-Boltzmann equations in a physics-informed neural
 The two images show $~9x$ error reduction at the junction, showing importance of including physics in the simulations.
 
 ### In progress 2D results 
-<img src="https://github.com/suchitakulkarni/DevSim_public/blob/main/results/devsim_pinn_potential_profile.png" width="600" />
+<img src="https://github.com/suchitakulkarni/DevSim_public/blob/main/results/devsim_pinn_potential_profile.png"/>
 This result is for one point and an initial training, it shows that the script is fully wired for a single point 2D run. It has not been yet wired for a multi anchor run, i.e. data genereator needs to be wired in, but the first results are promising.
 
 ## How to run
